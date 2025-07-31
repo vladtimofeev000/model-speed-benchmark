@@ -19,17 +19,21 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
+import java.util.Random;
 
 public class OpenAiLlmClient implements ILlmInlineClient {
     private static final Logger LOG = LoggerFactory.getLogger(OpenAiLlmClient.class);
 
-    private static final Gson GSON = new GsonBuilder()
+    public static final Gson GSON = new GsonBuilder()
             .enableComplexMapKeySerialization()
             .setStrictness(Strictness.LENIENT)
             .setObjectToNumberStrategy(ToNumberPolicy.LONG_OR_DOUBLE)
             .create();
 
     private static final int MAX_TOKENS = 100;
+
+    @NotNull
+    private static final List<String> STOP_TOKENS = List.of("\n");
 
     @NotNull
     private final OpenAiLlmClientInfo llmClientInfo;
@@ -53,8 +57,10 @@ public class OpenAiLlmClient implements ILlmInlineClient {
     }
 
     @Override
-    public @NotNull String generate(@NotNull ICompletionPrompt<?> prompt) {
-        validate(prompt);
+    public @Nullable String generate(@NotNull ICompletionPrompt<?> prompt) {
+        if (!isValid(prompt)) {
+            return null;
+        }
 
         final TokenizedCompletionPrompt tokenizedCompletionPrompt = (TokenizedCompletionPrompt) prompt;
 
@@ -67,12 +73,12 @@ public class OpenAiLlmClient implements ILlmInlineClient {
             final OpenAiLlmClientInlineRequest request = OpenAiLlmClientInlineRequest.builder()
                     .withModel(llmClientInfo.modelName)
                     .withMaxTokens(MAX_TOKENS)
-                    .withStop(List.of("\n"))
+                    .withStop(STOP_TOKENS)
                     .withPrompt(tokenizedCompletionPrompt.getValue())
                     .build();
             final String jsonRequest = GSON.toJson(request);
             final HttpRequest.Builder httpRequestBuilder = HttpRequest.newBuilder()
-                    .uri(URI.create(llmClientInfo.apiUrl))
+                    .uri(URI.create(llmClientInfo.modelUrl))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(jsonRequest));
 
@@ -85,20 +91,39 @@ public class OpenAiLlmClient implements ILlmInlineClient {
             final long startMs = System.currentTimeMillis();
             final HttpResponse<String> httpResponse = clientCall.call(
                     httpClient,
-                    httpRequest
+                    httpRequest,
+                    request
             );
             final long endMs = System.currentTimeMillis();
 
-            final OpenAiLlmClientInlineResponse response = GSON.fromJson(
-                    httpResponse.body(),
-                    OpenAiLlmClientInlineResponse.class
-            );
+            final String responseText;
+            if (httpResponse == null) {
+                responseText = "// MOCKED ANSWER";
+            } else {
+                final String body = httpResponse.body();
+                int statusCode = httpResponse.statusCode();
+                if (statusCode != 200) {
+                    LOG.error("Request failed with code: {}; body:{}", statusCode, body);
+                    return null;
+                }
 
-            if (response.choices.isEmpty()) {
-                throw new RuntimeException("Choices empty");
+                final OpenAiLlmClientInlineResponse response = GSON.fromJson(
+                        body,
+                        OpenAiLlmClientInlineResponse.class
+                );
+
+                if (response == null) {
+                    LOG.error("Failed to parse response: {}", body);
+                    return null;
+                }
+
+                if (response.choices.isEmpty()) {
+                   LOG.error("Choices are empty!");
+                   return null;
+                }
+
+                responseText = response.choices.getFirst().text();
             }
-
-            final String responseText = response.choices.getFirst().text();
 
             timingHolder.addTimingInfo(
                     new LlmTimingHolder.TimingInfo(
@@ -116,37 +141,43 @@ public class OpenAiLlmClient implements ILlmInlineClient {
         }
     }
 
-    private void validate(@NotNull ICompletionPrompt<?> prompt) {
+    private boolean isValid(@NotNull ICompletionPrompt<?> prompt) {
         if (!(prompt instanceof TokenizedCompletionPrompt tokenizedCompletionPrompt)) {
             throw new IllegalArgumentException("prompt should implement TokenizedCompletionPrompt");
         }
 
         if (tokenizedCompletionPrompt.getValue().size() + MAX_TOKENS >= llmClientInfo.contextSize) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Context overflow(modelSize:%s, promptSize:%s, maxTokens:%s)",
-                            llmClientInfo.contextSize,
-                            tokenizedCompletionPrompt.getValue().size(),
-                            MAX_TOKENS
-                    )
+            LOG.warn(
+                    "Prompt will be ignored: Context overflow(modelSize:{}, promptSize:{}, maxTokens:{})",
+                    llmClientInfo.contextSize,
+                    tokenizedCompletionPrompt.getValue().size(),
+                    MAX_TOKENS
             );
+            return false;
         }
 
+        return true;
     }
 
-    //Dumb interface for mocking http calls
+    // Dumb interface for mocking http calls.
+    // Dumb parameters to exclude any other calculations time.
     public interface IHttpClientCall {
-        @NotNull
+        @Nullable
         HttpResponse<String> call(
                 @NotNull HttpClient client,
-                @NotNull HttpRequest httpRequest
+                @NotNull HttpRequest httpRequest,
+                @NotNull OpenAiLlmClientInlineRequest request
         ) throws IOException, InterruptedException;
     }
 
-    public static class RealHttpClientCall implements IHttpClientCall{
+    public static class RealHttpClientCall implements IHttpClientCall {
 
         @Override
-        public @NotNull HttpResponse<String> call(@NotNull HttpClient client, @NotNull HttpRequest httpRequest) throws IOException, InterruptedException {
+        public @NotNull HttpResponse<String> call(
+                @NotNull HttpClient client,
+                @NotNull HttpRequest httpRequest,
+                @NotNull OpenAiLlmClientInlineRequest request
+        ) throws IOException, InterruptedException {
             return client.send(
                     httpRequest,
                     HttpResponse.BodyHandlers.ofString()
@@ -154,18 +185,38 @@ public class OpenAiLlmClient implements ILlmInlineClient {
         }
     }
 
+    public static class MockedHttpClientCall implements IHttpClientCall {
+        private static final long MODEL_ANSWER_TIME_MS = 300;
+        private static final Random RANDOM = new Random();
+
+        @Override
+        public @Nullable HttpResponse<String> call(
+                @NotNull HttpClient client,
+                @NotNull HttpRequest httpRequest,
+                @NotNull OpenAiLlmClientInlineRequest request
+        ) throws InterruptedException {
+            // 100 tokens prompt => +10ms
+            // 2000 tokens prompt => +200ms
+            // + random (0ms - 50ms)
+            final int additionalTimeMs = request.prompt.size() / 10 + RANDOM.nextInt(50);
+
+            Thread.sleep(MODEL_ANSWER_TIME_MS + additionalTimeMs);
+            return null;
+        }
+    }
+
     public record OpenAiLlmClientInfo(
             @NotNull String modelName,
+            @NotNull String modelUrl,
             int contextSize,
-            @NotNull String apiUrl,
             @Nullable String apiKey
     ) {
         @Override
         public @NotNull String toString() {
             return "OpenAiLlmClientInfo{" +
                     "modelName='" + modelName + '\'' +
+                    ", modelUrl='" + modelUrl + '\'' +
                     ", contextSize=" + contextSize +
-                    ", apiUrl='" + apiUrl + '\'' +
                     ", apiKey='" + apiKey + '\'' +
                     '}';
         }
@@ -242,8 +293,8 @@ public class OpenAiLlmClient implements ILlmInlineClient {
             private String model;
             private List<Long> prompt;
             private boolean stream = false;
-            private List<String> stop;
-            private int maxTokens;
+            private List<String> stop = STOP_TOKENS;
+            private int maxTokens = 100;
             private int n = 1;
             private double temperature = 0.0;
 

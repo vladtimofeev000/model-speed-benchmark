@@ -1,6 +1,5 @@
 package com.timofeev;
 
-
 import com.timofeev.benchmark.Benchmark;
 import org.apache.commons.cli.*;
 import org.jetbrains.annotations.NotNull;
@@ -8,12 +7,13 @@ import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.File;
 import java.util.Scanner;
 
 public class Main {
     private static final Logger LOG = LoggerFactory.getLogger(Main.class);
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws InterruptedException {
         printWelcomeMessage();
 
         Benchmark.BenchmarkParams params = parseArguments(args);
@@ -21,18 +21,19 @@ public class Main {
             params = interactiveConfig();
         }
 
-        System.out.println("\nConfiguration complete. Starting LLM client with:");
-        System.out.println(params);
+        System.out.println("Configuration complete. Starting LLM client with: " + params);
 
         try {
             Benchmark.run(params);
-        } catch (RuntimeException exception) {
+        } catch (Exception exception) {
             LOG.error("Benchmark failed", exception);
         }
     }
 
-    private static Benchmark.BenchmarkParams parseArguments(String[] args) {
+    private static Benchmark.BenchmarkParams parseArguments(String[] args) throws InterruptedException {
         final Options options = new Options();
+
+        options.addOption("h", "help", false, "Display help information");
 
         options.addOption(Option.builder("sl")
                 .longOpt("sample-limit")
@@ -85,7 +86,7 @@ public class Main {
                 .desc("API key")
                 .build());
 
-        options.addOption(Option.builder("c")
+        options.addOption(Option.builder("cs")
                 .longOpt("context")
                 .hasArg()
                 .type(Integer.class)
@@ -97,13 +98,30 @@ public class Main {
                 .longOpt("tokenizer")
                 .hasArg()
                 .type(String.class)
-                .required()
                 .desc("Tokenizer path")
+                .build());
+
+        options.addOption(Option.builder("ds")
+                .longOpt("dataset")
+                .hasArg()
+                .type(String.class)
+                .desc("Dataset path")
+                .build());
+
+        options.addOption(Option.builder("mck")
+                .longOpt("mock")
+                .hasArg()
+                .type(Boolean.class)
+                .desc("Use mocked model")
                 .build());
 
         final CommandLineParser parser = new DefaultParser();
         try {
             final CommandLine cmd = parser.parse(options, args);
+
+            if (cmd.hasOption("h")) {
+                printWelcomeMessage();
+            }
 
             return Benchmark.BenchmarkParams.builder()
                     .withSampleLimit(cmd.getParsedOptionValue("sl"))
@@ -113,11 +131,15 @@ public class Main {
                     .withModelName(cmd.getOptionValue("m"))
                     .withModelUrl(cmd.getOptionValue("u"))
                     .withApiKey(cmd.getOptionValue("k"))
-                    .withContextSize(cmd.getParsedOptionValue("c"))
-                    .withTokenizerPath(cmd.getOptionValue("tk"))
+                    .withContextSize(cmd.getParsedOptionValue("cs"))
+                    .withTokenizer(cmd.getOptionValue("tk"))
+                    .withDataset(cmd.getOptionValue("ds"))
+                    .withMock(cmd.getParsedOptionValue("mck"))
                     .build();
         } catch (ParseException e) {
-            System.err.println("Error parsing command line: " + e.getMessage());
+            LOG.error("Error parsing command line: {}", e.getMessage());
+            System.out.println("Interactive mode will be used.\n\n");
+            Thread.sleep(100);
             return null;
         }
     }
@@ -126,22 +148,24 @@ public class Main {
         final Scanner scanner = new Scanner(System.in);
         final Benchmark.Builder builder = Benchmark.BenchmarkParams.builder();
 
-        System.out.print("Sample limit [null]: ");
+        System.out.println("\n=======================================\n");
+
+        System.out.print("Sample limit [default: null]: ");
         String sampleLimit = scanner.nextLine().trim();
         builder.withSampleLimit(sampleLimit.isEmpty() ? null : Integer.parseInt(sampleLimit));
 
-        System.out.print("Thread count [1]: ");
+        System.out.print("Thread count [default: 1]: ");
         String threads = scanner.nextLine().trim();
         builder.withThreads(threads.isEmpty() ? null : Integer.parseInt(threads));
 
-        System.out.print("Delay between requests (ms) [0]: ");
+        System.out.print("Delay between requests (ms) [default: 0]: ");
         String delay = scanner.nextLine().trim();
         builder.withDelayMs(delay.isEmpty() ? null : Long.parseLong(delay));
 
-        System.out.print("GPU configuration [null]: ");
+        System.out.print("GPU configuration [default: null]: ");
         builder.withGpuConfig(getInputOrNull(scanner));
 
-        System.out.print("Model name (required): ");
+        System.out.print("Model name [required]: ");
         String modelName = scanner.nextLine().trim();
         while (modelName.isEmpty()) {
             System.out.print("Model name is required: ");
@@ -149,7 +173,7 @@ public class Main {
         }
         builder.withModelName(modelName);
 
-        System.out.print("Model URL (required): ");
+        System.out.print("Model URL [required]: ");
         String modelUrl = scanner.nextLine().trim();
         while (modelUrl.isEmpty()) {
             System.out.print("Model URL is required: ");
@@ -157,10 +181,10 @@ public class Main {
         }
         builder.withModelUrl(modelUrl);
 
-        System.out.print("API key [null]: ");
+        System.out.print("API key [default: null]: ");
         builder.withApiKey(getInputOrNull(scanner));
 
-        System.out.print("Context size (required): ");
+        System.out.print("Context size [required]: ");
         int contextSize;
         while (true) {
             String context = scanner.nextLine().trim();
@@ -177,13 +201,25 @@ public class Main {
         }
         builder.withContextSize(contextSize);
 
-        System.out.print("Path to tokenizer.json (required): ");
-        String tokenizerPath = scanner.nextLine().trim();
-        while (tokenizerPath.isEmpty()) {
-            System.out.print("Tokenizer path is required: ");
-            tokenizerPath = scanner.nextLine().trim();
+        System.out.print("Path to tokenizer json [default: Qwen2.5-Coder-14B tokenizer]: ");
+        String tokenizer = scanner.nextLine().trim();
+        while (tokenizer != null && !tokenizer.isEmpty() && !new File(tokenizer).exists()) {
+            System.out.print("tokenizer can't be found: " + new File(tokenizer).getAbsolutePath());
+            tokenizer = getInputOrNull(scanner);
         }
-        builder.withTokenizerPath(tokenizerPath);
+        builder.withTokenizer(tokenizer);
+
+        System.out.print("Path to dataset json [default: repoeval line-level]: ");
+        String dataset = getInputOrNull(scanner);
+        while (dataset != null && !dataset.isEmpty() && !new File(tokenizer).exists()) {
+            System.out.print("dataset can't be found: " + new File(dataset).getAbsolutePath());
+            dataset = getInputOrNull(scanner);
+        }
+        builder.withDataset(dataset);
+
+        System.out.print("Use mocked model [default: false]: ");
+        final String mock = scanner.nextLine().trim();
+        builder.withMock(mock.isEmpty() ? null : Boolean.parseBoolean(mock));
 
         return builder.build();
     }
@@ -196,23 +232,32 @@ public class Main {
 
     private static void printWelcomeMessage() {
         System.out.println(
-            """
-            *********************************************
-            *  LLM Client Configuration                 *
-            *  Provide parameters via command line or   *
-            *  enter them interactively below           *
-            *********************************************
-            Parameters:
-            1) Sample limit (default: null)
-            2) Thread count for parallelism (default: 1)
-            3) Delay between requests in ms (default: 0)
-            4) GPU configuration string (default: null)
-            5) Model name (required)
-            6) Model URL (required)
-            7) API key (default: null)
-            8) Context size (required)
-            9) Path to tokenizer.json (required)
-            """
+                """
+                        
+                        
+                        *********************************************
+                        *  LLM Client Configuration                 *
+                        *  Provide parameters via command line or   *
+                        *  enter them interactively below           *
+                        *********************************************
+                        
+                        [-h] to show this message.
+                        
+                        Parameters:
+                        1) Sample limit (default: null) [-sl]
+                        2) Thread count for parallelism (default: 1) [-t]
+                        3) Delay between requests in ms (default: 0) [-d]
+                        4) GPU configuration string (default: null) [-g]
+                        5) Model name (required) [-m]
+                        6) Model URL (required) [-u]
+                        7) API key (default: null) [-k]
+                        8) Context size (required) [-cs]
+                        9) Path to tokenizer json (default: Qwen2.5-Coder-14B tokenizer) [-tk]
+                        10) Path to dataset json (default: repoEval line-level) [-ds]
+                        11) Use mocked model (default: false) [-mck]
+                        
+                        
+                        """
         );
     }
 }

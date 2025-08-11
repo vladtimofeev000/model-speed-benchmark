@@ -21,4 +21,7 @@ Parameters:
 
 
 Example:
--sl 500 -t 2 -d 300 -g 4090 -m qwen2.5-coder-7b -u http://URL:7777/v1/completions -cs 2048
+-sl 500 -t 2 -d 300 -g 4090 -m qwen2.5-coder-7b -u http://195.209.214.245:7777/v1/completions -cs 2048
+
+
+Check generation.log for more DEBUG level logs.

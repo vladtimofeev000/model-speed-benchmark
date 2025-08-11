@@ -9,8 +9,11 @@ public class TokenizedCompletionPrompt implements ICompletionPrompt<List<Long>> 
     @NotNull
     private final List<Long> tokens;
 
-    public TokenizedCompletionPrompt(@NotNull List<Long> tokens) {
+    public final String promptStr;
+
+    public TokenizedCompletionPrompt(@NotNull List<Long> tokens, String promptStr) {
         this.tokens = tokens;
+        this.promptStr = promptStr;
     }
 
     @Override

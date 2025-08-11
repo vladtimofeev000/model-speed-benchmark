@@ -6,6 +6,7 @@ import com.google.gson.Strictness;
 import com.google.gson.ToNumberPolicy;
 import com.timofeev.benchmark.LlmTimingHolder;
 import com.timofeev.prompt.ICompletionPrompt;
+import com.timofeev.prompt.RepoEvalQwenPromptComputer;
 import com.timofeev.prompt.TokenizedCompletionPrompt;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -18,7 +19,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 
 public class OpenAiLlmClient implements ILlmInlineClient {
@@ -33,7 +36,9 @@ public class OpenAiLlmClient implements ILlmInlineClient {
     private static final int MAX_TOKENS = 100;
 
     @NotNull
-    private static final List<String> STOP_TOKENS = List.of("\n");
+    private static final List<String> STOP_TOKENS = List.of(
+         "\n"
+    );
 
     @NotNull
     private final OpenAiLlmClientInfo llmClientInfo;
@@ -67,7 +72,7 @@ public class OpenAiLlmClient implements ILlmInlineClient {
         try (
                 final HttpClient httpClient = HttpClient.newBuilder()
                         .version(HttpClient.Version.HTTP_1_1)
-                        .connectTimeout(Duration.ofSeconds(20))
+                        .connectTimeout(Duration.ofSeconds(60))
                         .build()
         ) {
             final OpenAiLlmClientInlineRequest request = OpenAiLlmClientInlineRequest.builder()
@@ -133,12 +138,18 @@ public class OpenAiLlmClient implements ILlmInlineClient {
                     )
             );
 
-            LOG.debug("Response: {}; Request: {}", responseText, request);
+            LOG.debug("Time: {}, Response: {}; Request(size={}): {}",
+                    endMs - startMs,
+                    responseText,
+                    request.prompt instanceof Collection ? ((Collection<?>) request.prompt).size() : null,
+                    request.prompt
+            );
 
             return responseText;
         } catch (IOException | InterruptedException e) {
-            throw new RuntimeException(e);
+            LOG.error("Generation failed", e);
         }
+        return null;
     }
 
     private boolean isValid(@NotNull ICompletionPrompt<?> prompt) {
@@ -146,7 +157,8 @@ public class OpenAiLlmClient implements ILlmInlineClient {
             throw new IllegalArgumentException("prompt should implement TokenizedCompletionPrompt");
         }
 
-        if (tokenizedCompletionPrompt.getValue().size() + MAX_TOKENS >= llmClientInfo.contextSize) {
+        if (tokenizedCompletionPrompt.getValue().size() + MAX_TOKENS >= llmClientInfo.contextSize
+        || tokenizedCompletionPrompt.getValue().size() + MAX_TOKENS <= llmClientInfo.contextSize - 600) {
             LOG.warn(
                     "Prompt will be ignored: Context overflow(modelSize:{}, promptSize:{}, maxTokens:{})",
                     llmClientInfo.contextSize,
@@ -198,7 +210,14 @@ public class OpenAiLlmClient implements ILlmInlineClient {
             // 100 tokens prompt => +10ms
             // 2000 tokens prompt => +200ms
             // + random (0ms - 50ms)
-            final int additionalTimeMs = request.prompt.size() / 10 + RANDOM.nextInt(50);
+            final int additionalTimeMs;
+            if (request.prompt instanceof Collection<?>) {
+                additionalTimeMs = ((Collection<?>)request.prompt).size() / 10 + RANDOM.nextInt(50);
+            } else if (request.prompt instanceof String){
+                additionalTimeMs = ((String)request.prompt).length() / 10 / 4 + RANDOM.nextInt(50);
+            } else {
+                additionalTimeMs = RANDOM.nextInt(50);
+            }
 
             Thread.sleep(MODEL_ANSWER_TIME_MS + additionalTimeMs);
             return null;
@@ -245,7 +264,7 @@ public class OpenAiLlmClient implements ILlmInlineClient {
         @NotNull
         public final String model;
         @NotNull
-        public final List<Long> prompt;
+        public final Object prompt;
         public final boolean stream;
         @NotNull
         public final List<String> stop;
@@ -260,7 +279,7 @@ public class OpenAiLlmClient implements ILlmInlineClient {
 
         public OpenAiLlmClientInlineRequest(
                 @NotNull String model,
-                @NotNull List<Long> prompt,
+                @NotNull Object prompt,
                 boolean stream,
                 @NotNull List<String> stop,
                 int maxTokens,
@@ -291,7 +310,7 @@ public class OpenAiLlmClient implements ILlmInlineClient {
 
         public static class Builder {
             private String model;
-            private List<Long> prompt;
+            private Object prompt;
             private boolean stream = false;
             private List<String> stop = STOP_TOKENS;
             private int maxTokens = 100;
@@ -306,7 +325,7 @@ public class OpenAiLlmClient implements ILlmInlineClient {
                 return this;
             }
 
-            public Builder withPrompt(@NotNull List<Long> prompt) {
+            public Builder withPrompt(@NotNull Object prompt) {
                 this.prompt = prompt;
                 return this;
             }

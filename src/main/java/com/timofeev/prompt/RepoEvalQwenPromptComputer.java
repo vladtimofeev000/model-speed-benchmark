@@ -10,16 +10,16 @@ public class RepoEvalQwenPromptComputer implements IInlinePromptComputer {
     private static final Logger LOG = LoggerFactory.getLogger(RepoEvalQwenPromptComputer.class);
 
     @NotNull
-    private static final String FILE_SEPARATOR_TOKEN = "|file_sep|";
+    public static final String FILE_SEPARATOR_TOKEN = "<|file_sep|>";
 
     @NotNull
-    private static final String PREFIX_TOKEN = "|fim_prefix|";
+    public static final String PREFIX_TOKEN = "<|fim_prefix|>";
 
     @NotNull
-    private static final String SUFFIX_TOKEN = "|fim_suffix|";
+    public static final String SUFFIX_TOKEN = "<|fim_suffix|>";
 
     @NotNull
-    private static final String FIM_TOKEN = "|fim_middle|";
+    public static final String FIM_TOKEN = "<|fim_middle|>";
 
 
     @Override
@@ -36,11 +36,10 @@ public class RepoEvalQwenPromptComputer implements IInlinePromptComputer {
         final String promptText = insertLine(
                 datasetRow.prompt,
                 SUFFIX_TOKEN,
-                datasetRow.metadata.line_no
+                datasetRow.metadata.line_no + 1
         );
 
-        return FILE_SEPARATOR_TOKEN + "\n" +
-                PREFIX_TOKEN + promptText + FIM_TOKEN;
+        return FILE_SEPARATOR_TOKEN + "\n" + PREFIX_TOKEN + promptText + FIM_TOKEN;
     }
 
     @NotNull
@@ -68,7 +67,7 @@ public class RepoEvalQwenPromptComputer implements IInlinePromptComputer {
 
         // Handle insertion after last line
         if (lineNumber == lines.length + 1) {
-            sb.append("\n").append(textToInsert);
+            sb.append(textToInsert);
         }
 
         return sb.toString();

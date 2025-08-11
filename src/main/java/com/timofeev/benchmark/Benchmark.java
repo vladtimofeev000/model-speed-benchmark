@@ -21,6 +21,7 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 public class Benchmark {
@@ -57,9 +58,16 @@ public class Benchmark {
         try (
                 final ExecutorService executor = Executors.newFixedThreadPool(params.threads)
         ) {
+            AtomicInteger counter = new AtomicInteger(0);
             for (List<TokenizedCompletionPrompt> batch : batches) {
                 final CompletableFuture<Void> future = CompletableFuture.runAsync(
-                        () -> compute(params, llmClient, batch),
+                        () -> compute(
+                                params,
+                                llmClient,
+                                batch,
+                                counter,
+                                batches.stream().mapToLong(Collection::size).sum()
+                                ),
                         executor
                 );
                 futures.add(future);
@@ -70,22 +78,22 @@ public class Benchmark {
             );
 
             mergedFuture.join();
+        } finally {
+            final StringBuilder report = new StringBuilder();
+
+            report.append("INFO: ").append(params).append("\n\n");
+
+            report.append(timingHolder.getTimingReport());
+
+            LOG.info("Report: \n\n {}", report);
+
+            final File reportFile = new File("report.csv");
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(reportFile))) {
+                writer.write(report.toString());
+            }
+
+            LOG.info("Report saved to: {}", reportFile.getAbsolutePath());
         }
-
-        final StringBuilder report = new StringBuilder();
-
-        report.append("INFO: ").append(params).append("\n\n");
-
-        report.append(timingHolder.getTimingReport());
-
-        LOG.info("Report: \n\n {}", report);
-
-        final File reportFile = new File("report.csv");
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(reportFile))) {
-            writer.write(report.toString());
-        }
-
-        LOG.info("Report saved to: {}", reportFile.getAbsolutePath());
     }
 
     private static @NotNull OpenAiLlmClient getLlmClient(@NotNull BenchmarkParams params, LlmTimingHolder timingHolder) {
@@ -113,14 +121,20 @@ public class Benchmark {
     private static void compute(
             @NotNull BenchmarkParams params,
             @NotNull OpenAiLlmClient llmClient,
-            @NotNull List<TokenizedCompletionPrompt> batch
-    ) {
+            @NotNull List<TokenizedCompletionPrompt> batch,
+            @NotNull AtomicInteger counter,
+            long totalPrompts
+            ) {
         for (TokenizedCompletionPrompt prompt : batch) {
             llmClient.generate(prompt);
             try {
                 Thread.sleep(params.delayMs);
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
+            }
+            int i = counter.incrementAndGet();
+            if (i % 100 == 0) {
+                LOG.info("Processed {}/{}", i, totalPrompts);
             }
         }
     }
@@ -168,7 +182,7 @@ public class Benchmark {
             for (long id : encoding.getIds()) {
                 tokens.add(id);
             }
-            tokenizedPrompts.add(new TokenizedCompletionPrompt(tokens));
+            tokenizedPrompts.add(new TokenizedCompletionPrompt(tokens, prompt));
         }
 
         return tokenizedPrompts;

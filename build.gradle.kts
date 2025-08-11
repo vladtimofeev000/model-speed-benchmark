@@ -16,6 +16,7 @@ dependencies {
 
     implementation("org.jetbrains:annotations:26.0.2")
 
+    implementation("org.knowm.xchart:xchart:3.8.8")
     implementation("org.apache.commons:commons-collections4:4.5.0")
     implementation("commons-cli:commons-cli:1.9.0")
     implementation("ai.djl.huggingface:tokenizers:0.33.0")
